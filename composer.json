@@ -1,0 +1,19 @@
+{
+  "name": "ultimate-multisite/wp-queue-worker",
+  "description": "Event-loop job queue for WordPress. Executes WP Cron and Action Scheduler jobs at exact scheduled times with zero polling.",
+  "type": "wordpress-plugin",
+  "license": "GPL-2.0-or-later",
+  "authors": [
+    {
+      "name": "David Stone",
+      "homepage": "https://ultimatemultisite.com"
+    }
+  ],
+  "require": {
+    "php": ">=8.1",
+    "workerman/workerman": "^5.1"
+  },
+  "config": {
+    "optimize-autoloader": true
+  }
+}
