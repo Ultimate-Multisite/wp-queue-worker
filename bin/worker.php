@@ -408,25 +408,38 @@ function load_network_plugins(): int
             }
         }
 
-        include_once $file;
-        $loaded_count++;
+        // Wrap in try/catch — some plugins expect per-site DB tables that
+        // don't exist on the primary site (e.g. WPForms, WooCommerce PDF IPS Pro).
+        // Non-fatal: the important thing is that hook callbacks get registered.
+        try {
+            include_once $file;
+            $loaded_count++;
 
-        // Fire any newly registered callbacks for already-completed actions.
-        // Example: a plugin that hooks after_setup_theme to call its setup()
-        // function — that action already fired, so we invoke the new callback now.
-        foreach ($bootstrap_actions as $action) {
-            if (!did_action($action) || !isset($wp_filter[$action])) {
-                continue;
-            }
-            foreach ($wp_filter[$action]->callbacks as $pri => $cbs) {
-                foreach ($cbs as $id => $cb) {
-                    if (isset($before[$action][$pri]) && in_array($id, $before[$action][$pri], true)) {
-                        continue;
+            // Fire any newly registered callbacks for already-completed actions.
+            // Example: a plugin that hooks after_setup_theme to call its setup()
+            // function — that action already fired, so we invoke the new callback now.
+            foreach ($bootstrap_actions as $action) {
+                if (!did_action($action) || !isset($wp_filter[$action])) {
+                    continue;
+                }
+                foreach ($wp_filter[$action]->callbacks as $pri => $cbs) {
+                    foreach ($cbs as $id => $cb) {
+                        if (isset($before[$action][$pri]) && in_array($id, $before[$action][$pri], true)) {
+                            continue;
+                        }
+                        // New callback — invoke it
+                        call_user_func($cb['function']);
                     }
-                    // New callback — invoke it
-                    call_user_func($cb['function']);
                 }
             }
+        } catch (\Throwable $e) {
+            // Log but continue — the plugin may have partially initialized
+            // which is often enough (e.g. hook callbacks registered before the error).
+            Worker::log(sprintf(
+                '[PLUGIN] %s failed to fully load: %s',
+                $plugin,
+                $e->getMessage()
+            ));
         }
     }
 
