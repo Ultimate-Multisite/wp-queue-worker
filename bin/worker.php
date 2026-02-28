@@ -2,12 +2,12 @@
 /**
  * Workerman Queue Worker
  *
- * Long-running event-loop process that executes WordPress cron and Action Scheduler
+ * Long-running event-loop process that schedules WordPress cron and Action Scheduler
  * jobs at their exact scheduled time. Listens on a Unix socket for instant notifications
  * from WordPress and periodically rescans the database as a safety net.
  *
- * Multiple worker processes (count=N) each bootstrap WordPress independently and
- * race to execute jobs. MySQL INSERT IGNORE prevents duplicate execution across processes.
+ * Jobs execute in isolated subprocesses (execute-job.php) that bootstrap WordPress
+ * with the correct site domain, ensuring all per-site plugins and DB tables are available.
  *
  * Usage:
  *   php worker.php start [-d]   (start, optionally daemonized)
@@ -19,7 +19,6 @@
 define('QUEUE_WORKER_RUNNING', true);
 
 // --- Auto-discover vendor/autoload.php ---
-// Check plugin-local vendor/ first, then walk up directories
 $autoload = null;
 $search = __DIR__;
 for ($i = 0; $i < 10; $i++) {
@@ -40,7 +39,6 @@ require_once dirname(__DIR__) . '/src/class-job-payload.php';
 require_once dirname(__DIR__) . '/src/class-socket-client.php';
 
 // --- Auto-discover wp-load.php ---
-// Priority: WP_ROOT_PATH env var > walk up from plugin dir
 $wp_load = null;
 
 if (getenv('WP_ROOT_PATH')) {
@@ -54,12 +52,10 @@ if (!$wp_load) {
     $search = dirname(__DIR__);
     for ($i = 0; $i < 10; $i++) {
         $search = dirname($search);
-        // Standard WordPress
         if (file_exists($search . '/wp-load.php')) {
             $wp_load = $search . '/wp-load.php';
             break;
         }
-        // Bedrock: web/wp/wp-load.php
         if (file_exists($search . '/web/wp/wp-load.php')) {
             $wp_load = $search . '/web/wp/wp-load.php';
             break;
@@ -72,12 +68,9 @@ if (!$wp_load) {
     exit(1);
 }
 
-// The site root is the directory containing composer.json / .env
-// For Bedrock: site/ (parent of web/wp/wp-load.php -> web/ -> site/)
-// For standard WP: same dir as wp-load.php
 $site_root = dirname($autoload, 2);
 
-// Load .env if Dotenv is available (Bedrock has it, standard WP doesn't)
+// Load .env if Dotenv is available (Bedrock)
 if (class_exists('Dotenv\\Dotenv') && file_exists($site_root . '/.env')) {
     $env_files = file_exists($site_root . '/.env.local')
         ? ['.env', '.env.local']
@@ -93,14 +86,20 @@ use Workerman\Timer;
 $socket_path     = getenv('QUEUE_WORKER_SOCKET_PATH') ?: '/tmp/wp-queue-worker.sock';
 $primary_domain  = getenv('DOMAIN_CURRENT_SITE') ?: 'localhost';
 $worker_count    = (int) (getenv('QUEUE_WORKER_COUNT') ?: 4);
+$max_concurrent  = (int) (getenv('QUEUE_WORKER_MAX_CONCURRENT') ?: 2); // per worker process
+$job_timeout     = 300;   // seconds — subprocess hard limit
 $rescan_interval = 60;    // seconds between DB rescans
 $memory_limit    = 200;   // MB — restart if exceeded
 $uptime_limit    = 3600;  // seconds — restart after 1 hour
 
+// Path to the subprocess script
+$execute_script = __DIR__ . '/execute-job.php';
+
 // --- Per-process State (each forked child gets its own copy) ---
-$pending_timers = [];      // tracking_key => timer_id
-$running_jobs   = 0;
-$start_time     = time();
+$pending_timers    = [];   // tracking_key => timer_id
+$running_processes = [];   // index => ['process', 'pipes', 'payload', 'started', 'output']
+$running_jobs      = 0;
+$start_time        = time();
 
 // Clean up stale socket file
 if (file_exists($socket_path)) {
@@ -120,22 +119,26 @@ $worker->onWorkerStart = function ($w) use (
     $wp_load,
     $primary_domain,
     $socket_path,
+    $execute_script,
     &$pending_timers,
+    &$running_processes,
     &$running_jobs,
     &$start_time,
+    $max_concurrent,
+    $job_timeout,
     $rescan_interval,
     $memory_limit,
     $uptime_limit
 ) {
     $start_time = time();
-    $worker_id  = $w->id; // 0-based worker index
+    $worker_id  = $w->id;
 
-    // Make socket writable by the web group (only first worker needs to)
     if ($worker_id === 0 && file_exists($socket_path)) {
         chmod($socket_path, 0660);
     }
 
-    // --- Bootstrap WordPress inside each worker child process ---
+    // --- Bootstrap WordPress for DB scanning only ---
+    // Jobs execute in subprocesses with correct per-site context.
     $_SERVER['HTTP_HOST']      = $primary_domain;
     $_SERVER['SERVER_NAME']    = $primary_domain;
     $_SERVER['REQUEST_URI']    = '/';
@@ -145,94 +148,101 @@ $worker->onWorkerStart = function ($w) use (
 
     require_once $wp_load;
 
-    // Override wp_die so plugins that call it (e.g. WooCommerce privacy
-    // cleanup) throw an exception instead of terminating the process.
-    // Must be after wp-load.php since add_filter isn't available before.
-    add_filter('wp_die_handler', function () {
-        return function ($message = '', $title = '', $args = []) {
-            $msg = '';
-            if ($message instanceof \WP_Error) {
-                $msg = $message->get_error_message();
-            } elseif (is_string($message)) {
-                $msg = strip_tags($message);
-            }
-            throw new \RuntimeException('wp_die called: ' . ($msg ?: $title ?: 'unknown'));
-        };
-    });
+    Worker::log(sprintf('[W%d] WordPress bootstrapped for scanning. Primary domain: %s', $worker_id, $primary_domain));
 
-    Worker::log(sprintf('[W%d] WordPress bootstrapped. Primary domain: %s', $worker_id, $primary_domain));
-
-    // Load plugins active on other sites that weren't loaded during bootstrap.
-    // WordPress only loads plugins active on the primary site. switch_to_blog()
-    // only changes the DB prefix, it doesn't reload plugins. This ensures all
-    // Action Scheduler callbacks are registered regardless of which site owns the job.
-    $extra = load_network_plugins();
-    if ($extra > 0) {
-        Worker::log(sprintf('[W%d] Loaded %d additional plugin(s) from other network sites.', $worker_id, $extra));
-    }
-
-    // Ensure the lock table exists (idempotent)
     ensure_lock_table();
 
-    // --- Job execution callback ---
-    $execute_job = function ($payload) use (&$pending_timers, &$running_jobs, $worker_id) {
-        $key = $payload->tracking_key();
+    // --- Spawn a subprocess to execute a job ---
+    $spawn_job = function ($payload) use (
+        &$running_processes,
+        &$running_jobs,
+        $worker_id,
+        $execute_script
+    ) {
+        $json_b64 = base64_encode($payload->to_json());
+        $cmd = sprintf(
+            'php %s %s',
+            escapeshellarg($execute_script),
+            escapeshellarg($json_b64)
+        );
 
-        // Remove from tracking
-        unset($pending_timers[$key]);
+        $process = proc_open($cmd, [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ], $pipes);
 
-        // Atomically claim this job — INSERT IGNORE ensures only one process wins
-        $lock_key = 'qw_' . substr(md5($key), 0, 40);
-        if (!claim_job($lock_key)) {
-            return; // Another worker already claimed this job
-        }
-
-        $running_jobs++;
-
-        try {
-            switch_to_blog($payload->site_id);
-
-            if ($payload->source === 'action_scheduler') {
-                execute_as_job($payload, $worker_id);
-            } else {
-                execute_cron_job($payload, $worker_id);
-            }
-
-            restore_current_blog();
-        } catch (\Throwable $e) {
+        if (!is_resource($process)) {
             Worker::log(sprintf(
-                '[W%d][ERROR] Job %s on site %d failed: %s in %s:%d',
+                '[W%d][ERROR] Failed to spawn subprocess for %s on site %d',
                 $worker_id,
                 $payload->hook,
-                $payload->site_id,
-                $e->getMessage(),
-                $e->getFile(),
-                $e->getLine()
+                $payload->site_id
             ));
-            if (ms_is_switched()) {
-                restore_current_blog();
-            }
-        } finally {
-            $running_jobs--;
-            // Flush runtime object cache to avoid stale data across sites
-            if (function_exists('wp_cache_flush_runtime')) {
-                wp_cache_flush_runtime();
-            }
+            return;
         }
+
+        fclose($pipes[0]); // close stdin
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+
+        $running_jobs++;
+        $running_processes[] = [
+            'process' => $process,
+            'pipes'   => $pipes,
+            'payload' => $payload,
+            'started' => time(),
+            'stdout'  => '',
+            'stderr'  => '',
+        ];
+
+        Worker::log(sprintf(
+            '[W%d][SPAWN] %s %s on site %d (pid %d, %d running)',
+            $worker_id,
+            $payload->source === 'action_scheduler' ? "AS #{$payload->action_id}:" : 'Cron:',
+            $payload->hook,
+            $payload->site_id,
+            proc_get_status($process)['pid'] ?? 0,
+            $running_jobs
+        ));
     };
 
-    // Store globally so re-queue closures can reference it
+    // --- Job execution callback (fired by timer) ---
+    $execute_job = function ($payload) use (
+        &$pending_timers,
+        &$running_processes,
+        &$running_jobs,
+        $max_concurrent,
+        $spawn_job
+    ) {
+        $key = $payload->tracking_key();
+        unset($pending_timers[$key]);
+
+        // Check concurrency limit BEFORE claiming
+        if (count($running_processes) >= $max_concurrent) {
+            // Re-schedule with 2s delay
+            $timer_id = Timer::add(2, $GLOBALS['__execute_job'], [$payload], false);
+            $pending_timers[$key] = $timer_id;
+            return;
+        }
+
+        // Atomically claim — only one worker process wins
+        $lock_key = 'qw_' . substr(md5($key), 0, 40);
+        if (!claim_job($lock_key)) {
+            return;
+        }
+
+        $spawn_job($payload);
+    };
+
     $GLOBALS['__execute_job'] = $execute_job;
 
     // --- Schedule a job timer ---
     $schedule_timer = function ($payload) use (&$pending_timers, $execute_job) {
         $key = $payload->tracking_key();
-
-        // Skip if already tracked in this process
         if (isset($pending_timers[$key])) {
             return;
         }
-
         $delay = max(0, $payload->timestamp - time());
         $timer_id = Timer::add($delay, $execute_job, [$payload], false);
         $pending_timers[$key] = $timer_id;
@@ -240,21 +250,112 @@ $worker->onWorkerStart = function ($w) use (
 
     $GLOBALS['__schedule_timer'] = $schedule_timer;
 
+    // --- Poll running subprocesses for completion ---
+    Timer::add(0.5, function () use (&$running_processes, &$running_jobs, $worker_id, $job_timeout) {
+        foreach ($running_processes as $i => $proc) {
+            // Read available output
+            $out = stream_get_contents($proc['pipes'][1]);
+            if ($out !== false && $out !== '') {
+                $running_processes[$i]['stdout'] .= $out;
+            }
+            $err = stream_get_contents($proc['pipes'][2]);
+            if ($err !== false && $err !== '') {
+                $running_processes[$i]['stderr'] .= $err;
+            }
+
+            $status = proc_get_status($proc['process']);
+
+            if (!$status['running']) {
+                // Read remaining output
+                $remaining = stream_get_contents($proc['pipes'][1]);
+                if ($remaining) {
+                    $running_processes[$i]['stdout'] .= $remaining;
+                }
+                $remaining_err = stream_get_contents($proc['pipes'][2]);
+                if ($remaining_err) {
+                    $running_processes[$i]['stderr'] .= $remaining_err;
+                }
+
+                fclose($proc['pipes'][1]);
+                fclose($proc['pipes'][2]);
+                proc_close($proc['process']);
+
+                $exit_code = $status['exitcode'];
+                $payload   = $proc['payload'];
+                $elapsed   = time() - $proc['started'];
+                $label     = $payload->source === 'action_scheduler'
+                    ? "AS #{$payload->action_id}: {$payload->hook}"
+                    : "Cron: {$payload->hook}";
+
+                if ($exit_code === 0) {
+                    Worker::log(sprintf(
+                        '[W%d][DONE] %s on site %d (%ds)',
+                        $worker_id,
+                        $label,
+                        $payload->site_id,
+                        $elapsed
+                    ));
+                } else {
+                    $error_msg = trim($running_processes[$i]['stderr'] ?: $running_processes[$i]['stdout']);
+                    // Truncate long error messages
+                    if (strlen($error_msg) > 500) {
+                        $error_msg = substr($error_msg, 0, 500) . '...';
+                    }
+                    Worker::log(sprintf(
+                        '[W%d][FAIL] %s on site %d (exit %d, %ds): %s',
+                        $worker_id,
+                        $label,
+                        $payload->site_id,
+                        $exit_code,
+                        $elapsed,
+                        $error_msg
+                    ));
+                }
+
+                unset($running_processes[$i]);
+                $running_jobs--;
+                continue;
+            }
+
+            // Timeout check
+            if (time() - $proc['started'] > $job_timeout) {
+                $payload = $proc['payload'];
+                $pid = $status['pid'];
+                proc_terminate($proc['process'], 9);
+                fclose($proc['pipes'][1]);
+                fclose($proc['pipes'][2]);
+                proc_close($proc['process']);
+
+                Worker::log(sprintf(
+                    '[W%d][TIMEOUT] %s on site %d exceeded %ds limit (pid %d)',
+                    $worker_id,
+                    $payload->hook,
+                    $payload->site_id,
+                    $job_timeout,
+                    $pid
+                ));
+
+                unset($running_processes[$i]);
+                $running_jobs--;
+            }
+        }
+        // Re-index to prevent gaps
+        $running_processes = array_values($running_processes);
+    });
+
     // --- Initial DB scan ---
     Worker::log(sprintf('[W%d] Scanning database for pending jobs...', $worker_id));
     rescan_all_jobs($schedule_timer);
     Worker::log(sprintf('[W%d] Loaded %d pending jobs.', $worker_id, count($pending_timers)));
 
     // --- Periodic rescan timer ---
-    // Stagger rescan across workers to avoid all hitting the DB simultaneously
     $stagger = $worker_id * 5;
     Timer::add($rescan_interval, function () use ($schedule_timer, &$pending_timers, $worker_id) {
         Worker::log(sprintf('[W%d][RESCAN] %d timers pending, rescanning...', $worker_id, count($pending_timers)));
         rescan_all_jobs($schedule_timer);
     });
-    // Initial staggered delay before first periodic rescan
     if ($stagger > 0) {
-        Timer::add($stagger, function () {}, null, false); // no-op to offset timing
+        Timer::add($stagger, function () {}, null, false);
     }
 
     // --- Memory and uptime watchdog ---
@@ -275,18 +376,15 @@ $worker->onWorkerStart = function ($w) use (
 };
 
 // --- Handle incoming socket messages ---
-// Workerman round-robins connections across worker processes
 $worker->onMessage = function ($connection, $data) use (&$pending_timers, &$running_jobs, &$start_time) {
     $data = trim($data);
 
-    // Handle control commands
     $decoded = json_decode($data, true);
     if (is_array($decoded) && isset($decoded['command'])) {
         handle_command($connection, $decoded, $pending_timers, $running_jobs, $start_time);
         return;
     }
 
-    // Handle job payload
     try {
         $payload = \QueueWorker\Job_Payload::from_json($data);
         $schedule_timer = $GLOBALS['__schedule_timer'];
@@ -300,31 +398,21 @@ $worker->onMessage = function ($connection, $data) use (&$pending_timers, &$runn
 
 // --- Helper Functions ---
 
-/**
- * Claim a job using a DB row as an atomic flag.
- * Uses INSERT IGNORE into a lightweight lock table — only one process can claim a given key.
- * The row persists for 5 minutes to prevent re-execution.
- */
 function claim_job(string $job_key): bool
 {
     global $wpdb;
     $table = $wpdb->base_prefix . 'qw_job_locks';
 
-    // Clean up expired locks (older than 5 minutes)
     $wpdb->query("DELETE FROM `$table` WHERE claimed_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)");
 
-    // Attempt to claim — INSERT IGNORE fails silently if key already exists
     $result = $wpdb->query($wpdb->prepare(
         "INSERT IGNORE INTO `$table` (lock_key, claimed_at) VALUES (%s, NOW())",
         $job_key
     ));
 
-    return $result === 1; // 1 = row inserted (we claimed it), 0 = already existed
+    return $result === 1;
 }
 
-/**
- * Ensure the job locks table exists. Called once per worker startup.
- */
 function ensure_lock_table(): void
 {
     global $wpdb;
@@ -335,155 +423,6 @@ function ensure_lock_table(): void
         claimed_at DATETIME NOT NULL
     ) ENGINE=InnoDB"
     );
-}
-
-/**
- * Load plugins that are active on other network sites but weren't loaded
- * during the primary site's bootstrap.
- *
- * WordPress only loads plugins for the bootstrapped site. In multisite,
- * switch_to_blog() only swaps the DB prefix — it doesn't reload plugins.
- * This means Action Scheduler callbacks registered by per-site plugins
- * (not network-activated) would be missing when executing jobs for those sites.
- *
- * This function:
- * 1. Collects all active plugins across every site in the network
- * 2. Includes any plugin files not already loaded
- * 3. Fires their newly-registered callbacks for bootstrap actions that
- *    have already completed (plugins_loaded, after_setup_theme, init, wp_loaded)
- *
- * @return int Number of additional plugins loaded.
- */
-function load_network_plugins(): int
-{
-    global $wp_filter;
-
-    if (!is_multisite()) {
-        return 0;
-    }
-
-    // Collect all unique active plugins across every site
-    $all_plugins = [];
-    $sites = get_sites(['number' => 0, 'fields' => 'ids']);
-    foreach ($sites as $site_id) {
-        switch_to_blog($site_id);
-        foreach (get_option('active_plugins', []) as $plugin) {
-            $all_plugins[$plugin] = true;
-        }
-        restore_current_blog();
-    }
-
-    // Build a lookup of already-included files (normalized to realpath)
-    $included = [];
-    foreach (get_included_files() as $f) {
-        $included[$f] = true;
-    }
-
-    // Actions that have already fired during bootstrap — we'll need to
-    // manually invoke any new callbacks these freshly-loaded plugins register
-    $bootstrap_actions = ['plugins_loaded', 'after_setup_theme', 'init', 'wp_loaded'];
-
-    $loaded_count = 0;
-
-    foreach (array_keys($all_plugins) as $plugin) {
-        $file = WP_PLUGIN_DIR . '/' . $plugin;
-        if (!file_exists($file)) {
-            continue;
-        }
-
-        // Skip if already included
-        $real = realpath($file);
-        if ($real && isset($included[$real])) {
-            continue;
-        }
-
-        // Snapshot current callbacks for bootstrap actions
-        $before = [];
-        foreach ($bootstrap_actions as $action) {
-            if (isset($wp_filter[$action])) {
-                $before[$action] = [];
-                foreach ($wp_filter[$action]->callbacks as $pri => $cbs) {
-                    $before[$action][$pri] = array_keys($cbs);
-                }
-            }
-        }
-
-        // Wrap in try/catch — some plugins expect per-site DB tables that
-        // don't exist on the primary site (e.g. WPForms, WooCommerce PDF IPS Pro).
-        // Non-fatal: the important thing is that hook callbacks get registered.
-        try {
-            include_once $file;
-            $loaded_count++;
-
-            // Fire any newly registered callbacks for already-completed actions.
-            // Example: a plugin that hooks after_setup_theme to call its setup()
-            // function — that action already fired, so we invoke the new callback now.
-            foreach ($bootstrap_actions as $action) {
-                if (!did_action($action) || !isset($wp_filter[$action])) {
-                    continue;
-                }
-                foreach ($wp_filter[$action]->callbacks as $pri => $cbs) {
-                    foreach ($cbs as $id => $cb) {
-                        if (isset($before[$action][$pri]) && in_array($id, $before[$action][$pri], true)) {
-                            continue;
-                        }
-                        // New callback — invoke it
-                        call_user_func($cb['function']);
-                    }
-                }
-            }
-        } catch (\Throwable $e) {
-            // Log but continue — the plugin may have partially initialized
-            // which is often enough (e.g. hook callbacks registered before the error).
-            Worker::log(sprintf(
-                '[PLUGIN] %s failed to fully load: %s',
-                $plugin,
-                $e->getMessage()
-            ));
-        }
-    }
-
-    return $loaded_count;
-}
-
-function execute_cron_job(\QueueWorker\Job_Payload $payload, int $worker_id): void
-{
-    Worker::log(sprintf('[W%d][EXEC] WP Cron: %s on site %d', $worker_id, $payload->hook, $payload->site_id));
-
-    // Remove the event from WP cron array, then execute the hook
-    wp_unschedule_event($payload->timestamp, $payload->hook, $payload->args);
-    do_action_ref_array($payload->hook, $payload->args);
-
-    // If recurring, WordPress will have already rescheduled it via the schedule_event hook
-    // which will notify us through the socket
-}
-
-function execute_as_job(\QueueWorker\Job_Payload $payload, int $worker_id): void
-{
-    if (!class_exists('ActionScheduler_QueueRunner')) {
-        Worker::log(sprintf('[W%d][SKIP] ActionScheduler not available for: %s', $worker_id, $payload->hook));
-        return;
-    }
-
-    Worker::log(sprintf(
-        '[W%d][EXEC] Action Scheduler #%d: %s on site %d',
-        $worker_id,
-        $payload->action_id,
-        $payload->hook,
-        $payload->site_id
-    ));
-
-    try {
-        $runner = \ActionScheduler_QueueRunner::instance();
-        $runner->process_action($payload->action_id);
-    } catch (\Exception $e) {
-        Worker::log(sprintf(
-            '[W%d][ERROR] AS action #%d failed: %s',
-            $worker_id,
-            $payload->action_id,
-            $e->getMessage()
-        ));
-    }
 }
 
 function rescan_all_jobs(callable $schedule_timer): void
@@ -501,7 +440,6 @@ function rescan_all_jobs(callable $schedule_timer): void
                     continue;
                 }
                 foreach ($hooks as $hook => $events) {
-                    // Skip hooks the interceptor bypasses
                     if (in_array($hook, [
                         'wp_version_check',
                         'wp_update_plugins',
@@ -542,7 +480,7 @@ function rescan_all_jobs(callable $schedule_timer): void
     }
 }
 
-function handle_command($connection, array $cmd, array &$pending_timers, int &$running_jobs, int &$start_time): void
+function handle_command($connection, array $cmd, array $pending_timers, int $running_jobs, int $start_time): void
 {
     switch ($cmd['command']) {
         case 'status':
