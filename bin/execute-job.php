@@ -56,6 +56,8 @@ if (!$autoload) {
     exit(1);
 }
 require_once $autoload;
+require_once dirname(__DIR__) . '/src/class-config.php';
+require_once dirname(__DIR__) . '/src/class-job-log.php';
 
 // --- Auto-discover wp-load.php ---
 $wp_load = null;
@@ -121,7 +123,7 @@ if ($site_id !== get_current_blog_id()) {
 // --- Execute jobs with per-job timeout ---
 $exit_code   = 0;
 $results     = [];
-$job_timeout = (int) (getenv('QUEUE_WORKER_JOB_TIMEOUT') ?: 300);
+$job_timeout = \QueueWorker\Config::job_timeout();
 
 // Enable per-job timeout via SIGALRM
 $has_pcntl = function_exists('pcntl_async_signals');
@@ -132,6 +134,9 @@ if ($has_pcntl) {
 foreach ($payloads as $i => $job) {
     $source = $job['source'] ?? 'wp_cron';
     $hook   = $job['hook'];
+    $job_start = microtime(true);
+    $job_status = 'ok';
+    $job_error = null;
 
     // Set per-job alarm
     if ($has_pcntl) {
@@ -158,8 +163,11 @@ foreach ($payloads as $i => $job) {
             $results[] = ['status' => 'ok', 'type' => 'cron', 'hook' => $hook];
         }
     } catch (\Throwable $e) {
-        fwrite(STDERR, "[Job $i] {$hook}: " . $e->getMessage() . "\n");
-        $results[] = ['status' => 'error', 'hook' => $hook, 'error' => $e->getMessage()];
+        $msg = $e->getMessage();
+        $job_status = (stripos($msg, 'timeout') !== false) ? 'timeout' : 'error';
+        $job_error = $msg;
+        fwrite(STDERR, "[Job $i] {$hook}: {$msg}\n");
+        $results[] = ['status' => 'error', 'hook' => $hook, 'error' => $msg];
         $exit_code = 1;
     }
 
@@ -167,6 +175,17 @@ foreach ($payloads as $i => $job) {
     if ($has_pcntl) {
         pcntl_alarm(0);
     }
+
+    // Log to qw_job_log table
+    $duration_ms = (int) round((microtime(true) - $job_start) * 1000);
+    \QueueWorker\Job_Log::insert(
+        (int) ($job['site_id'] ?? $site_id),
+        $hook,
+        $source,
+        $job_status,
+        $duration_ms,
+        $job_error
+    );
 }
 
 echo json_encode($results);

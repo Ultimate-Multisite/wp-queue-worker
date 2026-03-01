@@ -17,34 +17,14 @@ class CLI_Commands
      */
     public function status($args, $assoc_args): void
     {
-        $socket_path = Socket_Client::get_socket_path();
-
-        if (!file_exists($socket_path)) {
+        if (!Socket_Client::is_worker_running()) {
             WP_CLI::warning('Queue worker is not running (no socket file).');
             return;
         }
 
-        $socket = @stream_socket_client('unix://' . $socket_path, $errno, $errstr, 2);
-        if (!$socket) {
-            WP_CLI::warning("Socket exists but worker is not responding: $errstr");
-            return;
-        }
-
-        fwrite($socket, json_encode(['command' => 'status']) . "\n");
-
-        // Wait for response with timeout
-        stream_set_timeout($socket, 5);
-        $response = fgets($socket);
-        fclose($socket);
-
-        if (!$response) {
+        $data = Socket_Client::send_command('status');
+        if (!$data) {
             WP_CLI::warning('Worker did not respond to status request.');
-            return;
-        }
-
-        $data = json_decode($response, true);
-        if (!is_array($data)) {
-            WP_CLI::warning('Invalid response from worker.');
             return;
         }
 
@@ -54,6 +34,19 @@ class CLI_Commands
         WP_CLI::log(sprintf('  Pending timers: %d', $data['pending_timers'] ?? 0));
         WP_CLI::log(sprintf('  Running jobs:   %d', $data['running_jobs'] ?? 0));
         WP_CLI::log(sprintf('  Memory:         %s', $data['memory'] ?? 'unknown'));
+
+        if (!empty($data['running_details'])) {
+            WP_CLI::log('  Currently executing:');
+            foreach ($data['running_details'] as $detail) {
+                WP_CLI::log(sprintf(
+                    '    - site %d: %s (%d jobs, %ds elapsed)',
+                    $detail['site_id'],
+                    $detail['hook'],
+                    $detail['count'],
+                    $detail['elapsed']
+                ));
+            }
+        }
     }
 
     /**
@@ -127,17 +120,16 @@ class CLI_Commands
      */
     public function restart($args, $assoc_args): void
     {
-        $socket_path = Socket_Client::get_socket_path();
-
-        if (!file_exists($socket_path)) {
+        if (!Socket_Client::is_worker_running()) {
             WP_CLI::error('Queue worker is not running.');
         }
 
-        $socket = @stream_socket_client('unix://' . $socket_path, $errno, $errstr, 2);
+        // send_command won't get a response since worker stops immediately
+        $path = Socket_Client::get_socket_path();
+        $socket = @stream_socket_client('unix://' . $path, $errno, $errstr, 2);
         if (!$socket) {
             WP_CLI::error("Cannot connect to worker: $errstr");
         }
-
         fwrite($socket, json_encode(['command' => 'restart']) . "\n");
         fclose($socket);
 

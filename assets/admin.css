@@ -1,0 +1,212 @@
+/* WP Queue Worker Admin */
+
+.qw-card {
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    padding: 16px 20px;
+    margin: 16px 0;
+}
+
+.qw-card h2 {
+    margin-top: 0;
+    padding: 0;
+    font-size: 1.2em;
+}
+
+/* Status Grid */
+.qw-status-grid {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+}
+
+.qw-status-left {
+    flex: 1;
+    min-width: 280px;
+}
+
+.qw-status-right {
+    flex: 1;
+    min-width: 280px;
+}
+
+.qw-status-right h4 {
+    margin-top: 0;
+}
+
+/* Indicators */
+.qw-indicator {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+.qw-indicator-running {
+    background: #d4edda;
+    color: #155724;
+}
+
+.qw-indicator-stopped {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* Info table */
+.qw-info-table {
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 360px;
+}
+
+.qw-info-table th {
+    text-align: left;
+    padding: 4px 12px 4px 0;
+    color: #646970;
+    font-weight: normal;
+    width: 120px;
+}
+
+.qw-info-table td {
+    padding: 4px 0;
+}
+
+/* Stat cards */
+.qw-stat-cards {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+}
+
+.qw-stat {
+    text-align: center;
+    padding: 12px;
+    background: #f6f7f7;
+    border-radius: 4px;
+}
+
+.qw-stat-value {
+    display: block;
+    font-size: 24px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.qw-stat-error {
+    color: #d63638;
+}
+
+.qw-stat-label {
+    display: block;
+    font-size: 12px;
+    color: #646970;
+    margin-top: 4px;
+}
+
+/* Running details */
+.qw-running-list {
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.qw-running-list li {
+    padding: 3px 0;
+    font-size: 13px;
+}
+
+/* Auto-refresh */
+.qw-auto-refresh {
+    margin: 12px 0 0;
+    color: #646970;
+    font-size: 12px;
+}
+
+/* Status badges */
+.qw-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.qw-status-ok {
+    background: #d4edda;
+    color: #155724;
+}
+
+.qw-status-error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.qw-status-timeout {
+    background: #fff3cd;
+    color: #856404;
+}
+
+/* Source badges */
+.qw-source {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+.qw-source-cron {
+    background: #e2e3e5;
+    color: #383d41;
+}
+
+.qw-source-as {
+    background: #cce5ff;
+    color: #004085;
+}
+
+/* Site ID */
+.qw-site-id {
+    color: #888;
+    font-size: 12px;
+}
+
+/* Error text */
+.qw-error {
+    cursor: help;
+    color: #8b0000;
+    font-size: 12px;
+}
+
+/* Log viewer */
+.qw-log-viewer {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 16px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 400px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.qw-log-error {
+    color: #856404;
+    background: #fff3cd;
+    padding: 12px;
+    border-radius: 4px;
+}
+
+/* Responsive */
+@media (max-width: 782px) {
+    .qw-status-grid {
+        flex-direction: column;
+    }
+    .qw-stat-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}

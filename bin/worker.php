@@ -35,8 +35,10 @@ if (!$autoload) {
 require_once $autoload;
 
 // Load our own classes (the plugin entry point skips them when QUEUE_WORKER_RUNNING is true)
+require_once dirname(__DIR__) . '/src/class-config.php';
 require_once dirname(__DIR__) . '/src/class-job-payload.php';
 require_once dirname(__DIR__) . '/src/class-socket-client.php';
+require_once dirname(__DIR__) . '/src/class-job-log.php';
 
 // --- Auto-discover wp-load.php ---
 $wp_load = null;
@@ -81,17 +83,19 @@ if (class_exists('Dotenv\\Dotenv') && file_exists($site_root . '/.env')) {
 
 use Workerman\Worker;
 use Workerman\Timer;
+use QueueWorker\Config;
+use QueueWorker\Job_Log;
 
-// --- Configuration ---
-$socket_path     = getenv('QUEUE_WORKER_SOCKET_PATH') ?: '/tmp/wp-queue-worker.sock';
+// --- Configuration (via Config class: constant > env var > default) ---
+$socket_path     = Config::socket_path();
 $primary_domain  = getenv('DOMAIN_CURRENT_SITE') ?: 'localhost';
-$worker_count    = (int) (getenv('QUEUE_WORKER_COUNT') ?: 2);
-$max_concurrent  = (int) (getenv('QUEUE_WORKER_MAX_CONCURRENT') ?: 1); // per worker process
-$batch_timeout   = 3600;  // seconds — subprocess safety net (per-job timeout is in execute-job.php)
-$max_batch_size  = (int) (getenv('QUEUE_WORKER_MAX_BATCH_SIZE') ?: 50); // max jobs per subprocess batch
-$rescan_interval = 60;    // seconds between DB rescans
-$memory_limit    = 200;   // MB — restart if exceeded
-$uptime_limit    = 3600;  // seconds — restart after 1 hour
+$worker_count    = Config::worker_count();
+$max_concurrent  = Config::max_concurrent();
+$batch_timeout   = Config::batch_timeout();
+$max_batch_size  = Config::max_batch_size();
+$rescan_interval = Config::rescan_interval();
+$memory_limit    = Config::memory_limit();
+$uptime_limit    = Config::uptime_limit();
 
 // Path to the subprocess script
 $execute_script = __DIR__ . '/execute-job.php';
@@ -155,6 +159,10 @@ $worker->onWorkerStart = function ($w) use (
     Worker::log(sprintf('[W%d] WordPress bootstrapped for scanning. Primary domain: %s', $worker_id, $primary_domain));
 
     ensure_lock_table();
+
+    if ($worker_id === 0) {
+        Job_Log::ensure_table();
+    }
 
     // --- Spawn a subprocess to execute a batch of jobs (all same site) ---
     $spawn_batch = function (array $payloads) use (
@@ -400,12 +408,12 @@ $worker->onWorkerStart = function ($w) use (
 };
 
 // --- Handle incoming socket messages ---
-$worker->onMessage = function ($connection, $data) use (&$pending_timers, &$running_jobs, &$start_time) {
+$worker->onMessage = function ($connection, $data) use (&$pending_timers, &$running_jobs, &$start_time, &$running_processes) {
     $data = trim($data);
 
     $decoded = json_decode($data, true);
     if (is_array($decoded) && isset($decoded['command'])) {
-        handle_command($connection, $decoded, $pending_timers, $running_jobs, $start_time);
+        handle_command($connection, $decoded, $pending_timers, $running_jobs, $start_time, $running_processes);
         return;
     }
 
@@ -504,7 +512,7 @@ function rescan_all_jobs(callable $schedule_timer): void
     }
 }
 
-function handle_command($connection, array $cmd, array $pending_timers, int $running_jobs, int $start_time): void
+function handle_command($connection, array $cmd, array $pending_timers, int $running_jobs, int $start_time, array $running_processes): void
 {
     switch ($cmd['command']) {
         case 'status':
@@ -514,12 +522,34 @@ function handle_command($connection, array $cmd, array $pending_timers, int $run
             $mins   = floor(($uptime % 3600) / 60);
             $secs   = $uptime % 60;
 
+            $running_details = [];
+            foreach ($running_processes as $proc) {
+                $hooks = [];
+                $site_id = 0;
+                $count = 0;
+                if (!empty($proc['payloads'])) {
+                    $site_id = $proc['payloads'][0]->site_id;
+                    $count = count($proc['payloads']);
+                    foreach ($proc['payloads'] as $p) {
+                        $hooks[$p->hook] = true;
+                    }
+                }
+                $running_details[] = [
+                    'hook'    => implode(', ', array_keys($hooks)),
+                    'site_id' => $site_id,
+                    'count'   => $count,
+                    'elapsed' => time() - $proc['started'],
+                ];
+            }
+
             $response = json_encode([
-                'pid'            => getmypid(),
-                'uptime'         => sprintf('%dh %dm %ds', $hours, $mins, $secs),
-                'pending_timers' => count($pending_timers),
-                'running_jobs'   => $running_jobs,
-                'memory'         => sprintf('%.1f MB', $mem_mb),
+                'pid'             => getmypid(),
+                'uptime'          => sprintf('%dh %dm %ds', $hours, $mins, $secs),
+                'uptime_seconds'  => $uptime,
+                'pending_timers'  => count($pending_timers),
+                'running_jobs'    => $running_jobs,
+                'memory'          => sprintf('%.1f MB', $mem_mb),
+                'running_details' => $running_details,
             ]);
             $connection->send($response);
             break;
