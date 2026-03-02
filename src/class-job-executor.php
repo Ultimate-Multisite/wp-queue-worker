@@ -82,9 +82,19 @@ class Job_Executor
     private function execute_wp_cron(array $job): void
     {
         $timestamp = (int) ($job['timestamp'] ?? 0);
+        $hook      = $job['hook'];
         $args      = $job['args'] ?? [];
-        wp_unschedule_event($timestamp, $job['hook'], $args);
-        do_action_ref_array($job['hook'], $args);
+        $schedule  = $job['schedule'] ?? '';
+
+        // Reschedule recurring events before firing (mirrors wp-cron.php behavior).
+        // Without this, the event is simply deleted and plugins re-register it
+        // at time() on next load, causing an infinite rapid-fire loop.
+        if ($schedule !== '') {
+            wp_reschedule_event($timestamp, $schedule, $hook, $args);
+        }
+
+        wp_unschedule_event($timestamp, $hook, $args);
+        do_action_ref_array($hook, $args);
     }
 
     private function execute_action_scheduler(array $job): void
