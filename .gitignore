@@ -1,4 +1,8 @@
 vendor/
+bin/vendor/
+node_modules/
 composer.lock
 *.log
 *.pid
+assets/*.min.css
+assets/*.min.js

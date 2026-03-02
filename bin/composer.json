@@ -1,0 +1,8 @@
+{
+  "require": {
+    "workerman/workerman": "^5.1"
+  },
+  "config": {
+    "optimize-autoloader": true
+  }
+}

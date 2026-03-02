@@ -1,0 +1,15 @@
+{
+  "name": "wp-queue-worker",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "clean-css-cli": "^5.6",
+    "uglify-js": "^3.17"
+  },
+  "scripts": {
+    "css:build": "cleancss -o assets/admin.min.css assets/admin.css",
+    "js:build": "uglifyjs assets/admin.js -c -m -o assets/admin.min.js",
+    "build": "npm run css:build && npm run js:build",
+    "archive": "composer install --no-dev -d . && composer install --no-dev -d bin && npm run build && rm -rf /tmp/$npm_package_name && rsync -a --exclude-from=.distignore . /tmp/$npm_package_name/ && cd /tmp && zip -r $npm_package_name.zip $npm_package_name && mv $npm_package_name.zip $OLDPWD/ && rm -rf /tmp/$npm_package_name"
+  }
+}

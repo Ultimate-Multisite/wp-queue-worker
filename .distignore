@@ -1,0 +1,14 @@
+.git
+.gitignore
+.distignore
+.claude
+CLAUDE.md
+node_modules
+package.json
+package-lock.json
+tests
+.github
+*.log
+*.pid
+composer.lock
+bin/composer.lock

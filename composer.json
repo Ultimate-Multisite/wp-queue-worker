@@ -10,10 +10,14 @@
     }
   ],
   "require": {
-    "php": ">=8.1",
-    "workerman/workerman": "^5.1"
+    "php": ">=8.1"
+  },
+  "autoload": {
+    "classmap": ["src/"],
+    "exclude-from-classmap": ["src/class-job-list-table.php"]
   },
   "config": {
-    "optimize-autoloader": true
+    "optimize-autoloader": true,
+    "classmap-authoritative": true
   }
 }

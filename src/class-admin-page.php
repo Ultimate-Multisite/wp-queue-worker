@@ -34,10 +34,16 @@ class Admin_Page
     public static function enqueue_assets(): void
     {
         $base = QW_PLUGIN_URL . 'assets/';
-        $ver  = filemtime(QW_PLUGIN_DIR . '/assets/admin.css');
+        $dir  = QW_PLUGIN_DIR . '/assets/';
+        $debug = defined('SCRIPT_DEBUG') && SCRIPT_DEBUG;
 
-        wp_enqueue_style('qw-admin', $base . 'admin.css', [], $ver);
-        wp_enqueue_script('qw-admin', $base . 'admin.js', ['jquery'], $ver, true);
+        $css = (!$debug && file_exists($dir . 'admin.min.css')) ? 'admin.min.css' : 'admin.css';
+        $js  = (!$debug && file_exists($dir . 'admin.min.js'))  ? 'admin.min.js'  : 'admin.js';
+
+        $ver = filemtime($dir . $css);
+
+        wp_enqueue_style('qw-admin', $base . $css, [], $ver);
+        wp_enqueue_script('qw-admin', $base . $js, ['jquery'], $ver, true);
         wp_localize_script('qw-admin', 'qwAdmin', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonce'   => wp_create_nonce('qw_admin'),

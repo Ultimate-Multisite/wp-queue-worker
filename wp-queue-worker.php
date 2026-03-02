@@ -19,20 +19,16 @@ if (!defined('ABSPATH')) {
 define('QW_PLUGIN_DIR', __DIR__);
 define('QW_PLUGIN_URL', plugin_dir_url(__FILE__));
 
-require_once __DIR__ . '/src/class-config.php';
-require_once __DIR__ . '/src/class-job-payload.php';
-require_once __DIR__ . '/src/class-socket-client.php';
-require_once __DIR__ . '/src/class-job-log.php';
+// Autoload: Bedrock's site autoloader handles this in most installs.
+// For standalone installs, fall back to the plugin's own vendor autoloader.
+if (!class_exists('QueueWorker\\Config')) {
+    require_once __DIR__ . '/vendor/autoload.php';
+}
 
 // Don't register interceptors inside the worker process itself
 if (defined('QUEUE_WORKER_RUNNING') && QUEUE_WORKER_RUNNING) {
     return;
 }
-
-require_once __DIR__ . '/src/class-cron-interceptor.php';
-require_once __DIR__ . '/src/class-action-scheduler-bridge.php';
-require_once __DIR__ . '/src/class-cli-commands.php';
-require_once __DIR__ . '/src/class-admin-page.php';
 
 add_action('init', ['QueueWorker\\Cron_Interceptor', 'register']);
 add_action('action_scheduler_init', ['QueueWorker\\Action_Scheduler_Bridge', 'register']);
