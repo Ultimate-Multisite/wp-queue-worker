@@ -1,5 +1,5 @@
 {
-  "name": "ultimate-multisite/wp-queue-worker",
+  "name": "ultimate-multisite/the-perfect-wp-cron",
   "description": "Event-loop job queue for WordPress. Executes WP Cron and Action Scheduler jobs at exact scheduled times with zero polling.",
   "type": "wordpress-plugin",
   "license": "GPL-2.0-or-later",

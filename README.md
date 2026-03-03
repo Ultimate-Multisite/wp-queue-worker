@@ -1,4 +1,4 @@
-# WP Queue Worker
+# The Perfect WP Cron
 
 Event-loop job queue for WordPress. Replaces WP-Cron's poll-on-visit model and system cron's once-per-minute limitation with a long-running [Workerman](https://github.com/walkor/workerman) process that executes every WP Cron event and Action Scheduler action at its exact scheduled time — zero polling, zero delay.
 
@@ -11,7 +11,7 @@ Event-loop job queue for WordPress. Replaces WP-Cron's poll-on-visit model and s
 
 ## Advantages Over WP-Cron
 
-| WP-Cron | WP Queue Worker |
+| WP-Cron | The Perfect WP Cron |
 |---|---|
 | Triggers on page visits — low-traffic sites miss schedules | Triggers at exact scheduled time via event-loop timer |
 | Adds latency to a visitor's request | Runs in a separate process — zero impact on web requests |
@@ -21,7 +21,7 @@ Event-loop job queue for WordPress. Replaces WP-Cron's poll-on-visit model and s
 
 ## Advantages Over System Cron
 
-| System Cron (`* * * * *`) | WP Queue Worker |
+| System Cron (`* * * * *`) | The Perfect WP Cron |
 |---|---|
 | Minimum 1-minute granularity | Sub-second precision via Workerman timers |
 | Polls the database every minute even if nothing is due | Socket notification — the worker knows instantly when a new job is scheduled |
@@ -57,11 +57,11 @@ Add the repository and require the package:
   "repositories": [
     {
       "type": "vcs",
-      "url": "https://github.com/Ultimate-Multisite/wp-queue-worker.git"
+      "url": "https://github.com/Ultimate-Multisite/the-perfect-wp-cron.git"
     }
   ],
   "require": {
-    "ultimate-multisite/wp-queue-worker": "dev-main"
+    "ultimate-multisite/the-perfect-wp-cron": "dev-main"
   }
 }
 ```
@@ -69,10 +69,10 @@ Add the repository and require the package:
 Then run:
 
 ```bash
-composer update ultimate-multisite/wp-queue-worker
+composer update ultimate-multisite/the-perfect-wp-cron
 ```
 
-The plugin installs to `wp-content/plugins/wp-queue-worker/` (or `web/app/plugins/` on Bedrock).
+The plugin installs to `wp-content/plugins/the-perfect-wp-cron/` (or `web/app/plugins/` on Bedrock).
 
 ### Manual Installation
 
@@ -80,8 +80,8 @@ Clone into your plugins directory and install the Workerman dependency:
 
 ```bash
 cd wp-content/plugins
-git clone https://github.com/Ultimate-Multisite/wp-queue-worker.git
-cd wp-queue-worker
+git clone https://github.com/Ultimate-Multisite/the-perfect-wp-cron.git
+cd the-perfect-wp-cron
 composer install --no-dev
 ```
 
@@ -93,7 +93,7 @@ Every setting can be configured via PHP constant (in `wp-config.php`) or environ
 
 | Constant / Env Var | Default | Description |
 |---|---|---|
-| `QUEUE_WORKER_SOCKET_PATH` | `/tmp/wp-queue-worker.sock` | Unix socket path |
+| `QUEUE_WORKER_SOCKET_PATH` | `/tmp/the-perfect-wp-cron.sock` | Unix socket path |
 | `QUEUE_WORKER_COUNT` | `2` | Number of worker processes (Workerman forks) |
 | `QUEUE_WORKER_MAX_CONCURRENT` | `1` | Max concurrent subprocesses per worker |
 | `QUEUE_WORKER_MAX_BATCH_SIZE` | `50` | Max jobs per subprocess batch |
@@ -110,10 +110,10 @@ Every setting can be configured via PHP constant (in `wp-config.php`) or environ
 Example `wp-config.php`:
 
 ```php
-define('QUEUE_WORKER_SOCKET_PATH', '/run/wp-queue-worker.sock');
+define('QUEUE_WORKER_SOCKET_PATH', '/run/the-perfect-wp-cron.sock');
 define('QUEUE_WORKER_COUNT', 4);
 define('QUEUE_WORKER_JOB_TIMEOUT', 600);
-define('QUEUE_WORKER_LOG_FILE', '/var/log/wp-queue-worker.log');
+define('QUEUE_WORKER_LOG_FILE', '/var/log/the-perfect-wp-cron.log');
 ```
 
 ## Usage
@@ -122,22 +122,22 @@ define('QUEUE_WORKER_LOG_FILE', '/var/log/wp-queue-worker.log');
 
 ```bash
 # Foreground (for debugging)
-php wp-content/plugins/wp-queue-worker/bin/worker.php start
+php wp-content/plugins/the-perfect-wp-cron/bin/worker.php start
 
 # Daemonized
-php wp-content/plugins/wp-queue-worker/bin/worker.php start -d
+php wp-content/plugins/the-perfect-wp-cron/bin/worker.php start -d
 
 # Stop / Restart / Status
-php wp-content/plugins/wp-queue-worker/bin/worker.php stop
-php wp-content/plugins/wp-queue-worker/bin/worker.php restart
-php wp-content/plugins/wp-queue-worker/bin/worker.php status
+php wp-content/plugins/the-perfect-wp-cron/bin/worker.php stop
+php wp-content/plugins/the-perfect-wp-cron/bin/worker.php restart
+php wp-content/plugins/the-perfect-wp-cron/bin/worker.php status
 ```
 
 Bedrock: replace `wp-content/plugins` with `web/app/plugins`.
 
 ### systemd Service (Production)
 
-Create `/etc/systemd/system/wp-queue-worker.service`:
+Create `/etc/systemd/system/the-perfect-wp-cron.service`:
 
 ```ini
 [Unit]
@@ -149,11 +149,11 @@ Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/var/www/example.com/current
-ExecStart=/usr/bin/php web/app/plugins/wp-queue-worker/bin/worker.php start
+ExecStart=/usr/bin/php web/app/plugins/the-perfect-wp-cron/bin/worker.php start
 Restart=always
 RestartSec=5
-StandardOutput=append:/var/log/wp-queue-worker.log
-StandardError=append:/var/log/wp-queue-worker-error.log
+StandardOutput=append:/var/log/the-perfect-wp-cron.log
+StandardError=append:/var/log/the-perfect-wp-cron-error.log
 MemoryMax=1G
 Environment=WP_ENV=production
 Environment=QUEUE_WORKER_COUNT=4
@@ -163,8 +163,8 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable wp-queue-worker
-sudo systemctl start wp-queue-worker
+sudo systemctl enable the-perfect-wp-cron
+sudo systemctl start the-perfect-wp-cron
 ```
 
 ### WP-CLI Commands
@@ -228,7 +228,7 @@ WordPress Request                    Worker Process (Workerman)
 ## Troubleshooting
 
 **Worker won't start — "Address already in use"**
-A leftover socket exists. The worker tries to clean it up automatically, but if another process holds it: `rm /tmp/wp-queue-worker.sock` (or your configured path).
+A leftover socket exists. The worker tries to clean it up automatically, but if another process holds it: `rm /tmp/the-perfect-wp-cron.sock` (or your configured path).
 
 **Jobs aren't executing**
 1. Check `wp queue status` — is the worker running?

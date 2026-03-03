@@ -257,8 +257,8 @@ class Job_List_Table extends \WP_List_Table
     private function get_base_url(): string
     {
         if (is_multisite()) {
-            return network_admin_url('settings.php?page=wp-queue-worker');
+            return network_admin_url('settings.php?page=the-perfect-wp-cron');
         }
-        return admin_url('tools.php?page=wp-queue-worker');
+        return admin_url('tools.php?page=the-perfect-wp-cron');
     }
 }

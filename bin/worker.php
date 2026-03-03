@@ -76,7 +76,7 @@ if (file_exists($socket_path)) {
 // --- Create Worker and assign callbacks ---
 $worker = new Worker('unix://' . $socket_path);
 $worker->count = Config::worker_count();
-$worker->name  = 'wp-queue-worker';
+$worker->name  = 'the-perfect-wp-cron';
 
 $process = new Worker_Process($wp_load, $primary_domain, $execute_script);
 

@@ -1,7 +1,7 @@
 <?php
 /**
- * Plugin Name: WP Queue Worker
- * Plugin URI: https://github.com/Ultimate-Multisite/wp-queue-worker
+ * Plugin Name: The Perfect WP Cron
+ * Plugin URI: https://github.com/Ultimate-Multisite/the-perfect-wp-cron
  * Description: Event-loop job queue for WordPress. Executes WP Cron and Action Scheduler jobs at exact scheduled times with zero polling using Workerman.
  * Version: 1.0.0
  * Author: David Stone

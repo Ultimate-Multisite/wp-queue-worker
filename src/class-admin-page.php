@@ -12,7 +12,7 @@ class Admin_Page
                 'Queue Worker',
                 'Queue Worker',
                 'manage_network',
-                'wp-queue-worker',
+                'the-perfect-wp-cron',
                 [__CLASS__, 'render_page']
             );
         } else {
@@ -21,7 +21,7 @@ class Admin_Page
                 'Queue Worker',
                 'Queue Worker',
                 'manage_options',
-                'wp-queue-worker',
+                'the-perfect-wp-cron',
                 [__CLASS__, 'render_page']
             );
         }
@@ -204,9 +204,9 @@ class Admin_Page
             <h2>Job History</h2>
             <form method="get">
                 <?php if (is_multisite()): ?>
-                    <input type="hidden" name="page" value="wp-queue-worker">
+                    <input type="hidden" name="page" value="the-perfect-wp-cron">
                 <?php else: ?>
-                    <input type="hidden" name="page" value="wp-queue-worker">
+                    <input type="hidden" name="page" value="the-perfect-wp-cron">
                 <?php endif; ?>
                 <?php
                 $table->views();

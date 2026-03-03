@@ -6,7 +6,7 @@ class Config
 {
     public static function socket_path(): string
     {
-        return self::get('QUEUE_WORKER_SOCKET_PATH', '/tmp/wp-queue-worker.sock');
+        return self::get('QUEUE_WORKER_SOCKET_PATH', '/tmp/the-perfect-wp-cron.sock');
     }
 
     public static function worker_count(): int
@@ -59,10 +59,10 @@ class Config
         if (defined('ABSPATH')) {
             $dir = WP_CONTENT_DIR . '/logs';
             if (is_dir($dir) && is_writable($dir)) {
-                return $dir . '/wp-queue-worker.log';
+                return $dir . '/the-perfect-wp-cron.log';
             }
         }
-        return '/var/log/wp-queue-worker.log';
+        return '/var/log/the-perfect-wp-cron.log';
     }
 
     public static function log_retention(): int
