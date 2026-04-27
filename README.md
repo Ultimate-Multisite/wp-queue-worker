@@ -1,5 +1,7 @@
 # The Perfect WP Cron
 
+[![Download Plugin Now](https://img.shields.io/github/v/release/Ultimate-Multisite/the-perfect-wp-cron?style=for-the-badge&label=Download+Plugin+Now&color=0073aa)](https://github.com/Ultimate-Multisite/the-perfect-wp-cron/releases/latest/download/the-perfect-wp-cron.zip) &nbsp; Upload the zip to WordPress like any other plugin
+
 Event-loop job queue for WordPress. Replaces WP-Cron's poll-on-visit model and system cron's once-per-minute limitation with a long-running [Workerman](https://github.com/walkor/workerman) process that executes every WP Cron event and Action Scheduler action at its exact scheduled time — zero polling, zero delay.
 
 ## Who Is It For
